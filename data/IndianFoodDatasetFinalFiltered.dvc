@@ -1,6 +1,6 @@
 outs:
-- md5: a88eafda191d5e154a1c2bc6b3a80dbe.dir
-  size: 456697679
-  nfiles: 5801
+- md5: 0e6abd9064a4c32af58d5b901859e385.dir
+  size: 906847624
+  nfiles: 11576
   hash: md5
   path: IndianFoodDatasetFinalFiltered
