@@ -60,18 +60,25 @@ jobs:
     needs: test # Runs after testing
     steps:
       - name: Checkout code
+        # We need this to find requirements.txt
         uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies from requirements
+        # We must install the packages to audit them
         run: pip install -r requirements.txt
+
       - name: Install pip-audit
         run: pip install --upgrade pip-audit
+
       - name: Scan environment for vulnerabilities
-        # Scans installed packages and fails on CRITICAL
-        run: pip-audit --fail-on CRITICAL
+        # Run pip-audit as a module to find the new version
+        # This will fail the build on Critical CVEs for the bonus
+        run: python -m pip_audit --fail-on CRITICAL
 
   # D4c: Build and push Docker image
   build-docker:
