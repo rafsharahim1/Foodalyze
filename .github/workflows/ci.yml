@@ -24,7 +24,7 @@ jobs:
           ruff check .
           black --check .
 
-  # D4b: Testing job
+  # D4b: Testing job (FIXED)
   test:
     runs-on: ubuntu-latest
     needs: lint # Runs after linting
@@ -38,14 +38,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip setuptools wheel
-          # Install both runtime and dev requirements for testing
           pip install -r requirements.txt
-          
+          # Installs test dependencies directly
+          pip install pytest pytest-cov httpx 
       - name: Run tests with coverage
         env:
           PYTHONPATH: ${{ github.workspace }}
-        # We check coverage for 'app.py' (module name 'app')
-        run: pytest -v --maxfail=1 --disable-warnings --cov=app --cov-fail-under=60
+        # Runs pytest as a module to fix "command not found"
+        run: python -m pytest -v --maxfail=1 --disable-warnings --cov=app --cov-fail-under=60
       - name: Debug test environment
         run: |
           echo "Listing project files for verification..."
@@ -60,24 +60,17 @@ jobs:
     needs: test # Runs after testing
     steps:
       - name: Checkout code
-        # We need this to find requirements.txt
         uses: actions/checkout@v4
-      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies from requirements
-        # We must install the packages to audit them
         run: pip install -r requirements.txt
-
       - name: Install pip-audit
         run: pip install --upgrade pip-audit
-
       - name: Scan environment for vulnerabilities
-        # Run pip-audit (no -r flag) to scan installed packages
-        # This will fail the build on Critical CVEs for the bonus
+        # Scans installed packages and fails on CRITICAL
         run: pip-audit --fail-on CRITICAL
 
   # D4c: Build and push Docker image
@@ -97,23 +90,20 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           docker system prune -af || true
           df -h
-
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ghcr.io/alina1114/foodalyze:${{ github.sha }} # Use your repo name
+          tags: ghcr.io/alina1114/foodalyze:${{ github.sha }} 
 
   # D4d & D4e: Canary Deploy and Acceptance Test (FIXED)
   canary-and-acceptance-test:
@@ -122,17 +112,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Pull the new image
-        run: docker pull ghcr.io/alina1114/foodalyze:${{ github.sha }} # Use your repo name
-
+        run: docker pull ghcr.io/alina1114/foodalyze:${{ github.sha }}
       - name: Run the canary container
         run: |
           docker run \
@@ -140,15 +127,13 @@ jobs:
             --name canary \
             -p 8000:8000 \
             -e CANARY=true \
-            ghcr.io/alina1114/foodalyze:${{ github.sha }} # Use your repo name
-
+            ghcr.io/alina1114/foodalyze:${{ github.sha }}
       - name: Wait for canary to be healthy
         run: |
           echo "Waiting for canary API to start..."
           sleep 15
           # Retry loop in case the container is slow
           for i in 1 2 3 4 5; do curl -f http://localhost:8000/health && break || sleep 5; done
-      
       - name: Run 5+ acceptance tests
         run: |
           echo "Running acceptance tests against http://localhost:8000"
