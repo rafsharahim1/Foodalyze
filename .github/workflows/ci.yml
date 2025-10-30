@@ -43,8 +43,8 @@ jobs:
       - name: Run tests with coverage
         env:
           PYTHONPATH: ${{ github.workspace }}
-        # We check coverage for 'app.py' (module name 'app')
-        run: pytest -v --maxfail=1 --disable-warnings --cov=app --cov-fail-under=60
+        # Runs pytest as a module to fix "command not found"
+        run: python -m pytest -v --maxfail=1 --disable-warnings --cov=app --cov-fail-under=60
       - name: Debug test environment
         run: |
           echo "Listing project files for verification..."
@@ -53,31 +53,30 @@ jobs:
           python --version
           pip list
 
-  # D8: Security scan job (THIS IS THE CORRECTED JOB)
+  # D8: Security scan job (FIXED)
   scan:
     runs-on: ubuntu-latest
     needs: test # Runs after testing
     steps:
       - name: Checkout code
-        # FIX 1: Add this step to find requirements.txt
         uses: actions/checkout@v4
-
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
-      - name: Install latest pip-audit
+
+      - name: Install dependencies from requirements
+        # We must install the packages to audit them
+        run: pip install -r requirements.txt
+
+      - name: Install pip-audit
         run: pip install --upgrade pip-audit
-        
-      - name: Upgrade pip and setuptools (security fix)
-        run: |
-          pip install --upgrade pip setuptools
-          
-      - name: Scan dependencies for vulnerabilities
-        # FIX 2: Use python -m pip_audit, scan the -r file, and --fail-on
-        run: |
-          python -m pip_audit -r requirements.txt --fail-on CRITICAL
+
+      - name: Scan environment for vulnerabilities
+        # Run pip-audit (no -r flag) to scan installed packages
+        # This will fail the build on Critical CVEs for the bonus
+        run: python -m pip_audit --fail-on CRITICAL
 
   # D4c: Build and push Docker image
   build-docker:
@@ -87,7 +86,6 @@ jobs:
       contents: read
       packages: write # Permission to push to GHCR
     steps:
-      # Free up disk space before building (critical for large builds)
       - name: Free up disk space
         run: |
           echo "Cleaning up large preinstalled SDKs and Docker cache..."
@@ -97,32 +95,28 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           docker system prune -af || true
           df -h
-
-      # Checkout repository
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # Log in to GitHub Container Registry
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build & push Docker image (lowercase tag)
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ghcr.io/alina1114/foodalyze:${{ github.sha }}
+          tags: ghcr.io/alina1114/foodalyze:${{ github.sha }} 
 
-  # D4d: Canary deployment job
-  canary-deploy:
+  # D4d & D4e: Canary Deploy and Acceptance Test
+  canary-and-acceptance-test:
     runs-on: ubuntu-latest
-    needs: build-docker # Runs after the image is built
+    needs: build-docker 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -142,65 +136,41 @@ jobs:
       - name: Wait for canary to be healthy
         run: |
           echo "Waiting for canary API to start..."
-          sleep 15 # Give the container 15s to start up
-          # Ping the /health endpoint. -f makes it fail if status is not 200
-          curl -f http://localhost:8000/health
-
-   # D4e: Acceptance testing job
-  acceptance-tests:
-    runs-on: ubuntu-latest
-    needs: canary-deploy # Runs after the canary is deployed
-    steps:
-      - name: Checkout code
-        # Needed for sample image
-        uses: actions/checkout@v4
-
+          sleep 15
+          # Retry loop in case the container is slow
+          for i in 1 2 3 4 5; do curl -f http://localhost:8000/health && break || sleep 5; done
       - name: Run 5+ acceptance tests
-        env:
-          BASE_URL: "http://16.16.192.156:8000"    # <-- Replace with your EC2 IP
         run: |
-          echo "Running acceptance tests against $BASE_URL"
-
-          # Wait up to 30s for API to become ready
-          for i in {1..6}; do
-            echo "Checking if API is up (attempt $i)..."
-            if curl -f "$BASE_URL/health" > /dev/null 2>&1; then
-              echo "API is up!"
-              break
-            fi
-            echo "Still waiting..."
-            sleep 5
-          done
-
+          echo "Running acceptance tests against http://localhost:8000"
+          
           echo "Test 1: /health"
-          curl -f "$BASE_URL/health"
-
+          curl -f http://localhost:8000/health
+          
           echo "Test 2: /predict"
           curl -f -X 'POST' \
-            "$BASE_URL/predict" \
+            'http://localhost:8000/predict' \
             -H 'accept: application/json' \
             -H 'Content-Type: multipart/form-data' \
             -F 'file=@./tests/sample_food.jpg'
-
+          
           echo "Test 3: /predict?conf=0.1"
           curl -f -X 'POST' \
-            "$BASE_URL/predict?conf=0.1" \
+            'http://localhost:8000/predict?conf=0.1' \
             -H 'accept: application/json' \
             -H 'Content-Type: multipart/form-data' \
             -F 'file=@./tests/sample_food.jpg'
-
+          
           echo "Test 4: /predict?conf=0.9"
           curl -f -X 'POST' \
-            "$BASE_URL/predict?conf=0.9" \
+            'http://localhost:8000/predict?conf=0.9' \
             -H 'accept: application/json' \
             -H 'Content-Type: multipart/form-data' \
             -F 'file=@./tests/sample_food.jpg'
-
-          echo "Test 5: /model_info"
-          curl -f "$BASE_URL/model_info"
-
-          echo "Test 6: / (root)"
-          curl -f "$BASE_URL/"
-
-          echo "All 6 acceptance tests passed successfully!"
           
+          echo "Test 5: /model_info"
+          curl -f http://localhost:8000/model_info
+          
+          echo "Test 6: / (root)"
+          curl -f http://localhost:8000/
+
+          echo "✅ All 6 acceptance tests passed!"
